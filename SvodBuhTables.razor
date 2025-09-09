@@ -1,0 +1,1290 @@
+@using System.Text.Json
+@using OfficeOpenXml
+@using OfficeOpenXml.Style
+@using System.Globalization
+@using WebServer.Components.Pages.Tables
+@inject IJSRuntime Js
+
+@*
+    This fragment include 3 main tables and 3 additional tables.
+    Main tables are collapsed by default. They include main information. For open such a table the user needs to click on the button next to the table name.
+    By default displays summary table, where user sees the only nesassery information.
+    Here i show 2 types of displaying information. The first is the full table entry in this fragment, and the second and the third tables are using a prepared fragment with the necessary tables.
+    Second and third tables use the same fragment as for main and summary table.
+    I also use <style> to style the button in RadzenPanel.
+*@
+
+@*Show message for user while data is loading*@
+@if (!isLoaded)
+{
+    <RadzenProgressBarCircular ShowValue="true" Mode="ProgressBarMode.Indeterminate" Size="ProgressBarCircularSize.Large" ProgressBarStyle="ProgressBarStyle.Base">
+        <Template><div style="font-size:0.8rem">Загрузка...</div></Template>
+    </RadzenProgressBarCircular>
+}
+@* show when data is loaded *@
+else
+{
+    @* use as container for correct display all fragments and table *@
+    <div style="height:95vh; display:flex; flex-direction:column; margin-inline:10px;">
+
+        @*upper form where user can select year*@
+        <RadzenRow AlignItems="AlignItems.End" JustifyContent="JustifyContent.Center">
+            <RadzenColumn>
+                <RadzenRow AlignItems="AlignItems.End" JustifyContent="JustifyContent.Center">
+                    <RadzenButton ButtonStyle="ButtonStyle.Base" Variant="Variant.Text" Icon="arrow_back_ios" Click=@(() => ChangeYear(-1)) />
+                    <RadzenNumeric Value=@toYear TextAlign="TextAlign.Center" Style="width:fit-content" ShowUpDown="false" TValue="int" Change=@(async arg=> 
+                            {
+                                if(arg is int y)
+                                {
+                                    toYear = y;
+                                    await ChangeYear(toYear, true);
+                                }
+                            })/>
+                    <RadzenButton ButtonStyle="ButtonStyle.Base" Variant="Variant.Text" Icon="arrow_forward_ios" Click=@(() => ChangeYear(1)) />
+                </RadzenRow>
+            </RadzenColumn>
+        </RadzenRow>
+
+        @*form with buttons. Here user can select display method of data and download data in excel*@
+        <RadzenRow AlignItems="AlignItems.Center" Visible=@(!isSaving) Style="margin-left:1vw">
+            <RadzenColumn Style="display:flex; flex-direction:row; padding:0px, margin:0px">
+                <RadzenButton Icon="calendar_month" Text=" Все даты" Variant=@dtBtnVar title="Показать все даты" ButtonStyle="ButtonStyle.Success" Click=@(() => ShowYearDates(true)) />
+                <RadzenButton Style="margin-left:1vw" Icon="description" Text=" Excel" Variant="Variant.Text" title="Выгрузить Excel" Click=@(async()=> await DownloadExcel()) />
+            </RadzenColumn>
+        </RadzenRow>
+
+        @*First table *@
+        <RadzenRow AlignItems="AlignItems.End" JustifyContent="JustifyContent.Center">
+            <RadzenPanel AllowCollapse=true @bind-Value=@isHideObs Expand=@(()=> HideTable(1)) Collapse=@(()=> HideTable(1)) CollapseTitle="Свернуть" ExpandTitle="Развернуть" Collapsed=true Style="height:fit-content">
+
+                @*title*@
+                <HeaderTemplate>
+                    <RadzenText TextStyle="TextStyle.H6" Text="Распределение средств по объектам" Style="margin-right:1vw" />
+                </HeaderTemplate>
+
+                @*Main table*@
+                <ChildContent>
+                    @*Here the user can use the filter to search information and choose how to display information.
+                        Here is also the button which call confirm dialog and then send information to db, and text fieal where user can see the amount being sent
+                    *@
+                    <RadzenRow AlignItems="AlignItems.Center" Visible=@(!isSaving)>
+                        <RadzenColumn Size="3" Style="display:flex; flex-direction:row; justify-self:left">
+                            <RadzenTextBox Placeholder="Поиск по объектам" style="width:100%" @oninput=@(async arg => {await Filtering(arg:arg);} ) @bind-Value=@objFilter />
+                            <RadzenButton Icon="clear" Variant="Variant.Text" ButtonStyle="ButtonStyle.Secondary" title="Очистить" Click=@(()=> ClearFilter()) />
+                            <RadzenButton Style="margin-left:1vw" Icon="home" Variant=@obBtnVar title="Показать все объекты" ButtonStyle="ButtonStyle.Dark" Click=@(() => ShowAllObsOrNot(true)) />
+                        </RadzenColumn>
+                        <RadzenColumn Size="2" />
+                        <RadzenColumn Size="4" Style="display:flex; flex-direction:row">
+                            <RadzenLabel Text="Общая сумма распределений:" />
+                            <RadzenText Style="margin-left:1vw; align-self:end">@String.Format("{0:N0}", newRaspSums.Sum(s => s.Summa)).Replace(",", " ")</RadzenText>
+                            <RadzenButton Disabled=@(newRaspSums.Sum(s => s.Summa) == 0) Text="Распределить" title="Распределить" Style="height:fit-content; margin-left:1vw" Icon="check" Size="ButtonSize.ExtraSmall" Click=@(async()=> await SaveNewFinRasp()) />
+                        </RadzenColumn>
+                        <RadzenColumn Size="2">
+                        </RadzenColumn>
+                    </RadzenRow>
+
+                    @*While the information is being sent to the database, the user sees a progress bar *@
+                    <RadzenRow Visible=@isSaving JustifyContent="JustifyContent.Center" AlignItems="AlignItems.Center">
+                        <RadzenProgressBarCircular ShowValue=false Mode="ProgressBarMode.Indeterminate" Size="ProgressBarCircularSize.Medium" ProgressBarStyle="ProgressBarStyle.Base" />
+                    </RadzenRow>
+
+                    @*table*@
+                    <RadzenTable Style="height:calc(100vh - 350px); width:95vw; border-radius:10px; margin-top:1vh">
+                        <RadzenTableHeader>
+                            <RadzenTableHeaderRow>
+                                <RadzenTableHeaderCell Style="width:50px; z-index:1;position: sticky; left:0">
+                                    <RadzenText Text="#" TextAlign="TextAlign.Center" TextStyle="TextStyle.Subtitle1" />
+                                </RadzenTableHeaderCell>
+
+                                <RadzenTableHeaderCell class="rz-text-wrap" Style="width:300px; z-index:1; position: sticky; left:50px">
+                                    <RadzenText Text="Объект" TextAlign="TextAlign.Center" TextStyle="TextStyle.Subtitle1" />
+                                </RadzenTableHeaderCell>
+
+                                <RadzenTableHeaderCell style="width:150px; z-index:1; position: sticky; left:350px">
+                                    <RadzenText Text="Σ" TextAlign="TextAlign.Center" TextStyle="TextStyle.Subtitle1" />
+                                </RadzenTableHeaderCell>
+
+                                @foreach (var dt in dtList)
+                                {
+                                    <RadzenTableHeaderCell Style="width:150px; z-index:0">
+                                        <RadzenText Text=@dt.Date.ToString("dd.MM.yy") TextAlign="TextAlign.Center" TextStyle="TextStyle.Subtitle1" />
+                                    </RadzenTableHeaderCell>
+                                }
+                                @*if current year is same with selected year displays column with numeric field*@
+                                @if (today.Year == toYear)
+                                {
+                                    <RadzenTableHeaderCell Style="position: sticky; right:0;z-index:1; width:250px">
+                                        <RadzenText Text="Распределение" TextAlign="TextAlign.Center" TextStyle="TextStyle.Subtitle1" />
+                                    </RadzenTableHeaderCell>
+                                }
+                            </RadzenTableHeaderRow>
+                        </RadzenTableHeader>
+                        <RadzenTableBody>
+                            @foreach (var (tc, num) in tcFiltList.OrderBy(tc => tc.Obs.Description).Select((tc, num) => (tc, num + 1)))
+                            {
+                                @*use it to highlight lines*@
+                                <RadzenTableRow @onclick=@(()=>
+                                        {
+                                            selTc = selTc == tc ? null : tc;
+                                        })>
+
+                                    @{
+                                        var clr = selTc == tc ? "#ccccccba" : "aliceblue";
+                                    }
+
+                                    @*#*@
+                                    <RadzenTableCell Style=@($"z-index:1; position: sticky; left:0px; background-color:{clr}")>
+                                        <RadzenText TextStyle="TextStyle.Body2" TextAlign="TextAlign.Center" Text=@num.ToString() />
+                                    </RadzenTableCell>
+                                    @*description*@
+                                    <RadzenTableCell Style=@($"z-index:1; position: sticky; left:50px; background-color:{clr}")>
+                                        @{
+                                            var t = GetObjInfo(tc).FirstOrDefault(tt => tt.menu == "title").val;
+                                        }
+                                        <RadzenText class="rz-text-wrap" TextStyle="TextStyle.Body1" TextAlign="TextAlign.Start" title=@t>
+                                            @tc.Obs.Description
+                                        </RadzenText>
+                                    </RadzenTableCell>
+                                    @*sum*@
+                                    <RadzenTableCell Style=@($"z-index:1; position: sticky; left:350px; background-color:{clr}")>
+                                        @{
+                                            var sum = tc.FRList.Where(fr => fr.Dt.Year == toYear).Sum(s => s.Sm);                                            
+                                        }
+                                        <RadzenText TextAlign="TextAlign.Center" Text=@String.Format("{0:N0}", sum).Replace(",", " ") />
+                                    </RadzenTableCell>
+                                    @*dates*@
+                                    @foreach (var dt in dtList)
+                                    {
+                                        var o = tc.Obs.Id;
+                                        var sumPerDay = tc.FRList.Where(s => s.Dt.Date == dt).Sum(s => s.Sm);
+
+                                        var tit = GetDocInfo(tc, dt, false).FirstOrDefault(i => i.menu == "mes").val ?? "";
+                                        var txtColor = GetDocInfo(tc, dt).FirstOrDefault(i => i.menu == "style").val ?? "";
+                                        var btnDisp = (bool?)GetDocInfo(tc, dt).FirstOrDefault(i => i.menu == "btn").val ?? false;
+                                        var bckgColror = selTc == tc ? "aliceblue" : "";
+                                        var cellColor = selTc == tc && !tc.FRList.Any(s => s.Dt.Date == dt) ? "#ccccccba" : GetDocInfo(tc, dt, false).FirstOrDefault(i => i.menu == "bckg").val ?? "";
+
+                                        <RadzenTableCell Style=@($"width:100px; z-index:0; background-color:{cellColor}")>
+                                            <RadzenRow JustifyContent="JustifyContent.Center">
+
+                                                <RadzenText Style=@($" color:{txtColor}") TextStyle="TextStyle.Body1" TextAlign="TextAlign.Center" title=@tit
+                                                Text=@(sumPerDay == 0 ? "" : @String.Format("{0:N0}", sumPerDay).Replace(",", " ")) />
+
+                                                <RadzenButton title="Отменить" Visible=@btnDisp Icon="delete_history" Variant="Variant.Outlined" Style="height:fit-content"
+                                                Size="ButtonSize.ExtraSmall" Click=@(()=> DeleteFrFromDb(tc, dt)) ButtonStyle="ButtonStyle.Danger" />
+                                            </RadzenRow>
+                                        </RadzenTableCell>
+                                    }
+                                    @*Displayed if only the current year is selected*@
+                                    @if (today.Year == toYear)
+                                    {
+                                        <RadzenTableCell Style=@($"z-index:1; position: sticky; right:-1px; background-color:{clr}")>
+                                            @{
+                                                var obInfo = GetObjInfo(tc);
+                                                var hasRuk = (bool)obInfo.First(i => i.menu == "hasRuk").val;
+                                                var hasSmz = (bool)obInfo.First(i => i.menu == "hasSmz").val;
+                                                var maxSum = (double)obInfo.First(i => i.menu == "ost").val;
+
+                                                var canRasp = hasRuk && hasSmz;
+                                                var erTxt = canRasp ? "" : !hasRuk ? "Нет назначенного рук. проекта" : "Нет самозанятого для распределения";
+                                                int? nn = tc.Summa <= 0 ? null : (int)tc.Summa;
+                                                var color = "red";
+                                                var btnDis = tc.Summa <= 0;
+                                            }
+                                            <RadzenText class="rz-text-wrap" Visible=@(!canRasp) Text=@erTxt Style=@($"color:{color};") TextAlign="TextAlign.Center" />
+                                            <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceAround" AlignItems="AlignItems.Center">
+
+                                                <RadzenNumeric ShowUpDown=false Visible=@canRasp Style="width:90%" TValue="int?" Format="n0" Culture=@reg TextAlign="TextAlign.Right" @bind-Value=@nn Change=@(arg => InsertNewSum(arg, tc)) />
+                                                <RadzenButton Visible=@canRasp Disabled=@btnDis title="Очистить" Icon="do_not_disturb_on" Size="ButtonSize.ExtraSmall" Variant="Variant.Text" Style="height:fit-content"
+                                                Click=@(()=> DelCurrentRasp(tc)) ButtonStyle="ButtonStyle.Base" />
+                                            </RadzenStack>
+                                        </RadzenTableCell>
+                                    }
+                                </RadzenTableRow>
+                            }
+
+                            <RadzenTableRow Style="z-index:1; position:sticky; bottom:0; left:0; background-color:#c8ffc7">
+                                @{
+                                    var allSum = tcFiltList.SelectMany(tc => tc.FRList).ToList().Sum(fr => fr.Sm);
+                                }
+                                <RadzenTableCell Style="background-color:#c8ffc7; z-index:1; position: sticky; left:0px;" colspan="2">
+                                    <RadzenText Text="Итого:" TextAlign="TextAlign.Center" TextStyle="TextStyle.Subtitle1" />
+                                </RadzenTableCell>
+                                <RadzenTableCell Style="background-color:#c8ffc7; z-index:1; position: sticky; left:350px;">
+                                    <RadzenText Text=@String.Format("{0:N0}", allSum).Replace(",", " ") TextAlign="TextAlign.Center" TextStyle="TextStyle.Subtitle1" />
+                                </RadzenTableCell>
+                                @foreach (var dt in dtList)
+                                {
+                                    var dtSum = tcFiltList.SelectMany(tc => tc.FRList.Where(fr => fr.Dt.Date == dt.Date)).ToList().Sum(fr => fr.Sm);
+                                    <RadzenTableCell Style="background-color:#c8ffc7">
+                                        <RadzenText Text=@String.Format("{0:N0}", dtSum).Replace(",", " ") TextStyle="TextStyle.Subtitle1" TextAlign="TextAlign.Center" />
+                                    </RadzenTableCell>
+                                }
+                                @if (today.Year == toYear)
+                                {
+                                    <RadzenTableCell Style="background-color:#c8ffc7" />
+                                }
+                            </RadzenTableRow>
+                        </RadzenTableBody>
+                    </RadzenTable>
+                </ChildContent>
+
+                @*Summary table*@
+                <SummaryTemplate>
+                    <RadzenRow AlignItems="AlignItems.Center" Visible=@(!isSaving)>
+                        <RadzenColumn Size="3" Style="display:flex; flex-direction:row; justify-self:left">
+                            <RadzenTextBox Placeholder="Поиск по объектам" style="width:100%" @oninput=@(async arg => {await Filtering(arg:arg);} ) @bind-Value=@objFilter />
+                            <RadzenButton Icon="clear" Variant="Variant.Text" ButtonStyle="ButtonStyle.Secondary" title="Очистить" Click=@(()=> ClearFilter()) />
+                        </RadzenColumn>
+
+                        <RadzenColumn Size="6" Visible=@isSaving>
+                            <RadzenProgressBarCircular ShowValue=false Mode="ProgressBarMode.Indeterminate" Size="ProgressBarCircularSize.Medium" ProgressBarStyle="ProgressBarStyle.Base" />
+                        </RadzenColumn>
+                        <RadzenColumn Size="3" /> 
+                    </RadzenRow>
+
+                    <RadzenTable Style="width:95vw; border-radius:10px;margin-top:1vh">
+                        <RadzenTableHeader Style="text-align:center">
+                            <RadzenTableHeaderRow>
+                                @*#*@
+                                <RadzenTableHeaderCell Style="width:50px; z-index:1; position: sticky; left:0px;">
+                                    <RadzenText Text="#" TextAlign="TextAlign.Center" TextStyle="TextStyle.Subtitle1" />
+                                </RadzenTableHeaderCell>
+                                @*obj*@
+                                <RadzenTableHeaderCell class="rz-text-wrap" Style="width:350px; z-index:1; position: sticky; left:50px;">
+                                    <RadzenText Text="Объект" TextAlign="TextAlign.Center" TextStyle="TextStyle.Subtitle1" />
+                                </RadzenTableHeaderCell>
+                                @**@
+                                <RadzenTableHeaderCell style="width:150px; z-index:1; position: sticky; left:400px;">
+                                    <RadzenText Text="Σ" TextAlign="TextAlign.Center" TextStyle="TextStyle.Subtitle1" />
+                                </RadzenTableHeaderCell>
+
+                                @foreach (var dt in dtList)
+                                {
+                                    <RadzenTableHeaderCell Style="width:100px; z-index:0">
+                                        <RadzenText Text=@dt.Date.ToString("dd.MM.yy") TextAlign="TextAlign.Center" TextStyle="TextStyle.Subtitle1" />
+                                    </RadzenTableHeaderCell>
+                                }
+                            </RadzenTableHeaderRow>
+                        </RadzenTableHeader>
+                        <RadzenTableBody>
+                            @foreach (var (tc, num) in notRaspList.OrderByDescending(fr => fr.Obs.Description).Select((tc, num) => (tc, num + 1)))
+                            {
+                                <RadzenTableRow @onclick=@(()=>
+                                        {
+                                            selTc = selTc == tc ? null : tc;
+                                        })>
+                                    @{
+                                        var clr = selTc == tc ? "#ccccccba" : "aliceblue";
+                                    }
+                                    @*#*@
+                                    <RadzenTableCell Style=@($"z-index:1; position: sticky; left:0px; background-color:{clr}")>
+                                        <RadzenText TextStyle="TextStyle.Body2" TextAlign="TextAlign.Center" Text=@num.ToString() />
+                                    </RadzenTableCell>
+                                    @*description*@
+                                    <RadzenTableCell Style=@($"z-index:1; position: sticky; left:50px; background-color:{clr}")>
+                                        @{
+                                            var t = GetObjInfo(tc).FirstOrDefault(tt => tt.menu == "title").val;
+                                        }
+                                        <RadzenText class="rz-text-wrap" TextStyle="TextStyle.Body1" TextAlign="TextAlign.Start" title=@t>
+                                            @tc.Obs.Description
+                                        </RadzenText>
+                                    </RadzenTableCell>
+                                    @*sum*@
+                                    <RadzenTableCell Style=@($"z-index:1; position: sticky; left:350px; background-color:{clr}")>
+                                        <RadzenText TextAlign="TextAlign.Center">@(tc.FRList.Where(fr => fr.Dt.Year == toYear).Sum(s => s.Sm).ToString("n0"))</RadzenText>
+                                    </RadzenTableCell>
+                                    @*dts*@
+                                    @foreach (var dt in dtList)
+                                    {
+                                        var o = tc.Obs.Id;
+                                        var sumPerDay = tc.FRList.Where(s => s.Dt.Date == dt).Sum(s => s.Sm);
+
+                                        var tit = GetDocInfo(tc, dt).FirstOrDefault(i => i.menu == "mes").val ?? "";
+                                        var txtColor = GetDocInfo(tc, dt).FirstOrDefault(i => i.menu == "style").val ?? "";
+                                        var btnDisp = (bool?)GetDocInfo(tc, dt).FirstOrDefault(i => i.menu == "btn").val ?? false;
+                                        @* var cellColor = GetDocInfo(tc, dt).FirstOrDefault(i => i.menu == "bckg").val ?? ""; *@
+                                        var cellColor = selTc == tc && !tc.FRList.Any(s => s.Dt.Date == dt) ? "#ccccccba" : GetDocInfo(tc, dt, true).FirstOrDefault(i => i.menu == "bckg").val ?? "";
+
+                                        <RadzenTableCell Style=@($"width:100px; background-color:{cellColor}")>
+                                            <RadzenRow JustifyContent="JustifyContent.Center">
+
+                                                <RadzenText Style=@($" color:{txtColor}") TextStyle="TextStyle.Body1" TextAlign="TextAlign.Center" title=@tit>
+                                                    @(sumPerDay == 0 ? "" : sumPerDay.ToString("n0"))
+                                                </RadzenText>
+
+                                                <RadzenButton title="Отменить" Visible=@btnDisp Icon="delete_history" Variant="Variant.Outlined" Style="height:fit-content"
+                                                Size="ButtonSize.ExtraSmall" Click=@(()=> DeleteFrFromDb(tc, dt)) ButtonStyle="ButtonStyle.Danger" />
+                                            </RadzenRow>
+                                        </RadzenTableCell>
+                                    }
+                                </RadzenTableRow>
+                            }
+                            <RadzenTableRow Style="z-index:1; position:sticky; bottom:0; background-color:#c8ffc7">
+                                @{
+                                    var allSum = frList.Sum(fr => fr.Sm);
+                                }
+                                @* <RadzenTableCell Style="background-color:#c8ffc7" /> *@
+                                <RadzenTableCell Style="background-color:#c8ffc7; z-index:1; position: sticky; left:0px;" colspan="2">
+                                    <RadzenText Text="Итого:" TextAlign="TextAlign.Center" TextStyle="TextStyle.Subtitle1" />
+                                </RadzenTableCell>
+                                <RadzenTableCell Style="background-color:#c8ffc7; z-index:1; position: sticky; left:400px;">
+                                    <RadzenText Text=@allSum.ToString("n0") TextAlign="TextAlign.Center" TextStyle="TextStyle.Subtitle1" />
+                                </RadzenTableCell>
+                                @foreach (var dt in dtList)
+                                {
+                                    var dtSum2 = tcFiltList.SelectMany(tc => tc.FRList.Where(fr => fr.Dt.Date == dt.Date)).ToList();
+                                    var dtSum = dtSum2.Sum(fr => fr.Sm);
+
+                                    <RadzenTableCell Style="background-color:#c8ffc7">
+                                        <RadzenText Text=@dtSum.ToString("n0") TextStyle="TextStyle.Subtitle1" TextAlign="TextAlign.Center" />
+                                    </RadzenTableCell>
+                                }
+
+                            </RadzenTableRow>
+                        </RadzenTableBody>
+                    </RadzenTable>
+                </SummaryTemplate>
+
+            </RadzenPanel>
+        </RadzenRow>
+
+        @*Second table*@
+        <RadzenRow JustifyContent="JustifyContent.Center" Style="margin-top:2vh">
+            <RadzenPanel AllowCollapse=true @bind-Value=@isHideSmz Expand=@(()=> HideTable(2)) Collapse=@(()=> HideTable(2)) 
+                            CollapseTitle="Свернуть" ExpandTitle="Развернуть" Collapsed=true Style="height:fit-content">
+                @*Title*@
+                <HeaderTemplate>
+                    <RadzenText TextStyle="TextStyle.H6" Text="Распределение средств по самозанятым" Style="margin-right:1vw" />
+                </HeaderTemplate>
+
+                @*Main table*@
+                <ChildContent>
+                    <SmzRaspredTab User=@User Home=@Home FriList=@friList AllDates=@isAllDt @ref=smzRT
+                    FrList=@frList ObDict=@obTitleDict Today=@today ShortTable=false
+                    UDict=@uDict FdList=@finDogList FfList=@finFirmList ART=@this />
+                </ChildContent>
+
+                @*Summary teble*@
+                <SummaryTemplate>
+                    <SmzRaspredTab User=@User Home=@Home FriList=@friList AllDates=@isAllDt
+                    FrList=@frList ObDict=@obTitleDict Today=@today ShortTable=true
+                    UDict=@uDict FdList=@finDogList FfList=@finFirmList ART=@this />
+                </SummaryTemplate>
+
+            </RadzenPanel>
+        </RadzenRow>
+
+        @*Third table*@
+        <RadzenRow JustifyContent="JustifyContent.Center" Style="margin-top:2vh">
+            <RadzenPanel AllowCollapse=true @bind-Value=@isHideSmz Expand=@(()=> HideTable(2)) Collapse=@(()=> HideTable(2))
+                           CollapseTitle="Свернуть" ExpandTitle="Развернуть" Collapsed=true Style="height:fit-content">
+                @*Title*@
+                <HeaderTemplate>
+                    <RadzenText TextStyle="TextStyle.H6" Text="Распределение средств по ИП" Style="margin-right:1vw" />
+                </HeaderTemplate>
+
+                @*Main table*@
+                <ChildContent>
+                    <IpSvodTab Home=@Home FriList=@friList AllDates=@isAllDt
+                    FrList=@frList ObDict=@obTitleDict ShortTable=false
+                    UDict=@uDict FdDict=@finDogList.ToDictionary(d=> d.Id) FfList=@finFirmList />
+                </ChildContent>
+
+                @*Summary table*@
+                <SummaryTemplate>
+                    <IpSvodTab Home=@Home FriList=@friList AllDates=@isAllDt
+                    FrList=@frList ObDict=@obTitleDict ShortTable=true
+                    UDict=@uDict FdDict=@finDogList.ToDictionary(d=> d.Id) FfList=@finFirmList />
+                </SummaryTemplate>
+
+            </RadzenPanel>
+        </RadzenRow>
+    </div>
+
+    <style>
+        .rz-panel-titlebar {
+        align-self: center;
+        flex-direction: revert;
+        justify-content: left;
+        }
+
+        .rz-panel-titlebar-toggler .rzi-minus:before {
+        content: 'arrow_drop_up' !important;
+        text-align: center;
+        }
+
+        .rz-panel-titlebar-toggler .rzi-plus:before {
+        content: 'arrow_drop_down' !important;
+        }
+
+        .rz-group-header {
+        display: block;
+        justify-content: space-between;
+        align-items: center;
+        }
+
+    </style>
+
+}
+
+@code
+{
+    [Parameter]
+    public WebUser User { get; set; } = null!;
+
+    [Parameter]
+    public Home? Home { get; set; }
+
+    private CultureInfo reg = new CultureInfo("Fr-fr");
+
+    bool isLoaded;
+    bool isSaving;
+
+    Variant dtBtnVar = Variant.Text;
+    Variant obBtnVar = Variant.Text;
+
+    SmzRaspredTab smzRT = new();
+
+    //list for user
+    List<WebUser> allUserList = [];
+    List<WebUser> activeRuks = [];
+    List<WebUserMoneyWithObjId> smzO = [];
+
+    //list for objects
+    List<WebObject> obList = [];
+    List<WebObject> filteredObList = [];
+    List<int> montazhObjs = [];
+    List<int> yearObjs = [];
+
+    //lists for docs
+    List<WebFinDog> finDogList = [];
+    List<WebFinRasp> frList = [];
+    List<WebFinRaspItem> friList = [];
+    List<WebFinFirm> finFirmList = [];
+
+    List<TableClass> newRaspSums = [];
+
+    //lists for table
+    List<TableClass> tcList = [];
+    List<TableClass> notRaspList = [];
+    List<TableClass> tcFiltList = [];
+
+    Dictionary<int, WebUser> uDict = [];
+    Dictionary<int, WebUser> actRukDict = [];
+    Dictionary<int, List<WebItrId>> rukDict = [];
+    Dictionary<int, List<WebItrId>> allItrsOnObDict = [];
+    Dictionary<int, WebObject> obDict = [];
+    Dictionary<int, WebObject> obTitleDict = [];
+    Dictionary<int, List<WebFinRasp>> frDict = [];
+    Dictionary<int, List<WebFinRaspItem>> friDict = [];
+    Dictionary<int, List<WebUserMoneyWithObjId>> smzODict = [];
+
+    TableClass? selTc;
+
+    string btnIconOb = "arrow_drop_up";
+    string btnIconSmz = "arrow_drop_up";
+    string btnIconIp = "arrow_drop_up";
+    string objFilter = "";
+    string curObjFilter = "";
+    bool isHideObs = true;
+    bool isHideSmz = true;
+    bool isHideIP = true;
+    bool isAllDt;
+    bool showAllObs;
+
+    int toYear = DateTime.Now.Year;
+    int year = DateTime.Now.Year;
+    DateTime today = DateTime.Now.Date;
+    List<DateTime> dtList = [];
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && !isLoaded)
+        {
+            if (User.Rol == UserBuhRol)
+            {
+                await LoadLists();
+            }
+
+            isLoaded = true;
+            this.StateHasChanged();
+        }
+        await base.OnAfterRenderAsync(firstRender);
+    }
+
+    public async Task LoadLists()
+    {
+        //get all info for smz and user
+        var (eu, ul) = await Funs.SendReqAdmin<List<WebUser>?>("NameOfApi");
+        var (er, il) = await Funs.SendReqAdmin<List<WebItrId>?>("NameOfApi");
+        var (ear, arl) = await Funs.SendReqAdmin<List<WebUser>?>("NameOfApi");
+        var (ebl, bl) = await Funs.SendReqAdmin<List<WebUser>?>("NameOfApi");
+        var (eWum, wum) = await Funs.SendReqAdmin<List<WebUserWithMoney>?>("NameOfApi");
+        var (ewum, wumO) = await Funs.SendReqAdmin<List<WebUserMoneyWithObjId>?>("NameOfApi", ["here are keys for Api"]);
+
+        //get objects
+        var (eto, oTl) = await Funs.SendReqAdmin<List<WebObject>?>("NameOfApi", ["here are keys for Api"]);
+        var (emo, moL) = await Funs.SendReqAdmin<List<int>?>("NameOfApi");
+
+        //get docs
+        var (ef, fl) = await Funs.SendReqAdmin<List<WebFinRasp>?>("NameOfApi", ["here are keys for Api"]);
+        var (efri, fril) = await Funs.SendReqAdmin<List<WebFinRaspItem>?>("NameOfApi", ["here are keys for Api"]);
+        var (eff, ffl) = await Funs.SendReqAdmin<List<WebFinFirm>?>("NameOfApi");
+        var (efd, fdl) = await Funs.SendReqAdmin<List<WebFinDog>?>("NameOfApi", ["here are keys for Api");
+
+
+        if (wum != null && ul != null && oTl != null && fl != null && fril != null && il != null && ffl != null && fdl != null && arl != null && bl != null && wumO != null && moL != null && oTl != null)
+        {
+            frList = fl;
+            friList = fril;
+            finDogList = fdl;
+            finFirmList = ffl.Where(ff=> !ff.WebOff).ToList();
+            montazhObjs = moL;
+            obList = oTl;
+            obDict = obList.ToDictionary(o => o.Id ?? 0, o => o);
+            obTitleDict = oTl.ToDictionary(o => o.Id ?? 0, o => o);
+
+            allUserList = ul.Where(u=> !u.BlackList.HasValue).OrderBy(u => u.FullName).ToList();
+
+            smzO = wumO;
+            smzODict = smzO.GroupBy(s => s.ObjectId).ToDictionary(gr => gr.Key, gr => gr.ToList());
+
+            uDict = ul.Where(u => !u.BlackList.HasValue).ToDictionary(u => u.Id);
+
+            allItrsOnObDict = il.GroupBy(i => i.WebObjectId).ToDictionary(gr => gr.Key, gr => gr.ToList());
+
+            activeRuks = arl;
+            actRukDict = activeRuks.ToDictionary(ar => ar.Id);
+            rukDict = il.Where(i=> 
+                actRukDict.ContainsKey(i.WebUserId)
+            ).GroupBy(i => i.WebObjectId).ToDictionary(gr => gr.Key, gr => gr.ToList());
+
+            frDict = frList.GroupBy(fr => fr.ObjectId).ToDictionary(o => o.Key, o => o.ToList());
+            friDict = friList.GroupBy(fri => fri.FinRaspId).ToDictionary(gr => gr.Key, o => o.ToList());
+
+            //reset lists
+            if (tcList.Any())
+            {
+                tcList = [];
+                tcFiltList = [];
+            }
+
+            //create new
+            CreateTCList(showAllObs);
+
+            var notRasp = frList.Where(f =>
+                {
+                    var firs = friDict.ContainsKey(f.Id) ? friDict[f.Id] : [];
+                    var d = firs.Where(f => f.FinDogId.HasValue).ToList();
+                    var o = obDict.ContainsKey(f.ObjectId);
+                    return firs.All(f => !f.FinDogId.HasValue) && obDict.ContainsKey(f.ObjectId);
+                }).ToList();
+
+            var notRaspDict = notRasp.GroupBy(f => f.ObjectId).ToDictionary(gr => gr.Key, gr => gr.ToList());
+
+            notRaspList = notRasp.Select(fr =>
+                        {
+                            var ob = obDict[fr.ObjectId];
+                            var allObFr = notRaspDict[fr.ObjectId];
+                            return new TableClass { Obs = ob, FRList = allObFr };
+                        }).DistinctBy(fr => fr.Obs.Id).ToList();
+
+            smzRT.needUpdateTab = true;
+
+            ShowYearDates();
+            ShowAllObsOrNot();
+        }
+    }
+
+    void CreateTCList(bool allObs, bool isOtherYear = false)
+    {
+        filteredObList = isOtherYear ? allObs ? obList : obList.Where(oo => (!oo.IsDelete && !oo.IsClose && yearObjs.Contains(oo.Id ?? 0))
+                                                                     || (yearObjs.Contains(oo.Id ?? 0) && frDict.ContainsKey(oo.Id ?? 0))).ToList()
+                                     : allObs ? obList : obList.Where(oo => (!oo.IsDelete && !oo.IsClose && (montazhObjs.Contains(oo.Id ?? 0) || frDict.ContainsKey(oo.Id ?? 0)))
+                                     || (montazhObjs.Contains(oo.Id ?? 0) || frDict.ContainsKey(oo.Id ?? 0))).ToList();
+
+        tcList = filteredObList.Select(o =>
+        {
+            var frL = frDict.ContainsKey(o.Id ?? 0) ? frDict[o.Id ?? 0] : [];
+            var hasRuk = rukDict.ContainsKey(o.Id ?? 0);
+            var hasSmz = smzODict.ContainsKey(o.Id ?? 0);
+
+            var res = new TableClass
+                    {
+                        Obs = o,
+                        FRList = frL,
+                        HasRuk = hasRuk,
+                        HasSmz = hasSmz
+                    };
+            return res;
+        }).ToList();
+
+        var a = tcList.SelectMany(t => t.FRList).ToList();
+
+        tcFiltList = tcList;
+    }
+
+    async Task ChangeYear(int num, bool isFullYear = false)
+    {
+        toYear = isFullYear ? num : toYear + num;
+
+        isSaving = true;
+        this.StateHasChanged();
+        var (e, obs) = await Funs.SendReqAdmin<List<int>>("NameOfApi", ["here are keys for Api"]);
+
+        if(obs?.Any() ?? false)
+        {
+            yearObjs = obs;
+            await LoadLists();
+            CreateTCList(showAllObs, true);
+        }
+
+        isSaving = false;
+        ShowYearDates();
+    }
+
+    async Task Filtering(ChangeEventArgs? arg = null, string? filter = null)
+    {
+        var filt = "";
+
+        if (arg != null && arg.Value is string st)
+        {
+            curObjFilter = st;
+
+            await Task.Delay(400);
+
+            if (st == curObjFilter)
+            {
+                objFilter = st;
+            }
+        }
+        else
+        {
+            objFilter = filter ?? "";
+        }
+
+        filt = objFilter.Trim().ToLower();
+
+        tcFiltList = tcList.Where(t => ((filt == "") || t.Obs.Description.Trim().ToLower().Contains(filt))).ToList();
+        tcFiltList = tcFiltList.OrderBy(tc => tc.Obs.Description).ToList();
+
+    }
+
+    void HideTable(int type)
+    {
+        selTc = null;
+        switch (type)
+        {
+            case 1:
+                {
+                    isHideObs = !isHideObs;
+
+                    btnIconOb = isHideObs ? "arrow_drop_down" : "arrow_drop_up";
+                }
+                break;
+            case 2:
+                {
+                    isHideSmz = !isHideSmz;
+
+                    btnIconSmz = isHideSmz ? "arrow_drop_down" : "arrow_drop_up";
+                }
+                break;
+            case 3:
+                {
+                    isHideIP = !isHideIP;
+
+                    btnIconIp = isHideIP ? "arrow_drop_down" : "arrow_drop_up";
+                }
+                break;
+        }
+    }
+
+    void ClearFilter()
+    {
+        objFilter = "";
+        tcFiltList = tcList;
+
+        this.StateHasChanged();
+    }
+
+    /// <summary>
+    /// Class for displaying information in a table
+    /// </summary>
+    public class TableClass
+    {
+        public WebObject Obs { get; set; } = null!;
+        public List<WebFinRasp> FRList { get; set; } = [];
+        public double Summa { get; set; }
+        public bool HasRuk { get; set;}
+        public bool HasSmz { get; set;}        
+    }
+
+    /// <summary>
+    /// Func for addunf sum
+    /// </summary>
+    /// <param name="sum">entered amount</param>
+    /// <param name="tc">the object where the amount will be sent</param>
+    void InsertNewSum(int? ssum, TableClass tc)
+    {
+        var sum = (double?)ssum ?? 0.0;
+
+        tc.Summa = sum <= 0 ? 0 : sum;
+
+        //limit entered sum
+        var maxSum = (double)GetObjInfo(tc).FirstOrDefault(t => t.menu == "ost").val;
+
+        var resSums = maxSum - tc.Summa;
+        tc.Summa = resSums >= 0 ? tc.Summa : maxSum;
+
+        // если такого распределения еще нет, то оно добавляется
+        // If there is no such distribution in the list of distributions, add it to the list, otherwise, rewrite it
+        if (!newRaspSums.Contains(tc))
+        {
+            if (tc.Summa != 0)
+            {
+                newRaspSums.Add(tc);
+            }
+        }
+        else
+        {            
+            if (tc.Summa != 0)
+            {
+                newRaspSums.Remove(tc);
+                newRaspSums.Add(tc);
+            }
+            else
+            {
+                newRaspSums.Remove(tc);
+            }
+        }
+
+        //notification if sum more than limit
+        if (resSums < 0)
+        {
+            Funs.Notify(NotificationService, NotificationSeverity.Warning, "Распределяемая сумма превышает остаток. Сумма скорректирована до максимального значения", 3000);
+        }
+        ShowYearDates();        
+    }  
+
+    /// <summary>
+    /// display all dates within a year
+    /// </summary>
+    /// <param name="needChange">true- all dates, false - last 5</param>
+    void ShowYearDates(bool needChange = false)
+    {
+        isAllDt = needChange ? !isAllDt : isAllDt;
+
+        if (toYear == today.Year)
+        {
+            dtList = isAllDt ? frList.DistinctBy(fr => fr.Dt.Date).Select(fr => fr.Dt.Date).Where(f => f.Year == toYear).AsEnumerable().Reverse().Reverse().ToList()
+                             : frList.DistinctBy(fr => fr.Dt.Date).Select(fr => fr.Dt.Date).Where(f => f.Year == toYear).AsEnumerable().Reverse().Take(5).Reverse().ToList();
+
+            if (!dtList.Contains(today))
+            {
+                dtList.Add(today);
+            }
+
+        }
+        else
+        {
+            dtList = isAllDt ? frList.DistinctBy(fr => fr.Dt.Date).Select(fr => fr.Dt.Date).Where(f => f.Year == toYear).AsEnumerable().Reverse().Reverse().ToList()
+                             : frList.DistinctBy(fr => fr.Dt.Date).Select(fr => fr.Dt.Date).Where(f => f.Year == toYear).AsEnumerable().Reverse().Take(5).Reverse().ToList();
+        }
+
+        dtList = dtList.OrderBy(dt => dt.Date).ToList();
+
+        dtBtnVar = isAllDt ? Variant.Filled : Variant.Text;
+
+    }
+
+    /// <summary>
+    /// Count limit for user
+    /// </summary>
+    /// <param name="wu">user</param>
+    /// <returns>limit</returns>
+    double Limit(WebUserWithMoney wu)
+    {
+        var allRasps = friList.Where(f => f.UserTo == wu.Id && !f.Dt1C.HasValue && f.Date.Year == year).Sum(f => f.Sm);
+
+        return Funs.Ostatok(wu, allRasps);
+    }
+
+    /// <summary>
+    /// Delete distribution from numeric field
+    /// </summary>
+    /// <param name="tc">object with removable distribution</param>
+    void DelCurrentRasp(TableClass tc)
+    {
+        tc.Summa = 0;
+    }
+
+    /// <summary>
+    /// Save new distributions on db
+    /// </summary>
+    /// <returns></returns>
+    async Task SaveNewFinRasp()
+    {
+        //confirm dialog
+        var answ = await DialogService.OpenAsync("", ds =>
+                @<CustomConfirmDialog ConfirmBtnTxt="Распределить" DS="ds" Message=@($"Распределить сумму?") />,
+        new ConfirmOptions { CloseDialogOnOverlayClick = true, CloseDialogOnEsc = true }) ?? false;
+
+        if (answ)
+        {
+            //show while saving data
+            isSaving = true;
+            this.StateHasChanged();
+
+            var newFR = newRaspSums.Select(tc =>
+            {
+                return new WebFinRasp
+                {
+                    ObjectId = tc.Obs.Id ?? 0,
+                    Sm = tc.Summa, 
+                    VerGuidWO = tc.Obs.VerGuid,
+                    UserId = User.Id
+                };
+            }).ToList();
+
+            var (e, done) = await Funs.SendReqAdmin<bool?>("NameOfApi", ["here are keys for Api"], obj: newFR);
+
+            if (done ?? false)
+            {
+                //update information
+                await LoadLists();
+                objFilter = "";
+                Funs.Notify(NotificationService, NotificationSeverity.Success, "Распределено");
+                newRaspSums.Clear();
+            }
+            else
+            {
+                Funs.Notify(NotificationService, NotificationSeverity.Error, "Ошибка записи");
+            }
+            isSaving = false;
+        }
+    }
+
+    /// <summary>
+    /// Display all objects
+    /// </summary>
+    /// <param name="needChange"></param>
+    void ShowAllObsOrNot(bool needChange = false)
+    {
+        showAllObs = needChange ? !showAllObs : showAllObs;
+
+        if (toYear == today.Year)
+        {
+            CreateTCList(showAllObs);
+
+            if (!dtList.Contains(today))
+            {
+                dtList.Add(today);
+            }
+        }
+        else
+        {
+            dtList = isAllDt ? frList.DistinctBy(fr => fr.Dt.Date).Select(fr => fr.Dt.Date).Where(f => f.Year == toYear).AsEnumerable().Reverse().Reverse().ToList()
+                             : frList.DistinctBy(fr => fr.Dt.Date).Select(fr => fr.Dt.Date).Where(f => f.Year == toYear).AsEnumerable().Reverse().Take(5).Reverse().ToList();
+        }
+
+        obBtnVar = showAllObs ? Variant.Filled : Variant.Text;
+    }
+
+    /// <summary>
+    /// Display titles for object
+    /// </summary>
+    /// <param name="tc">object</param>
+    /// <returns></returns>
+    List<(string menu, object val)> GetObjInfo(TableClass tc)
+    {
+        var lst = new List<(string, object)>();
+
+        var ai = allItrsOnObDict.ContainsKey(tc.Obs.Id ?? 0) ? allItrsOnObDict[tc.Obs.Id ?? 0] : [];
+        var ruks = ai.Where(i => i.IsRuk).Select(i =>
+                        {
+                            return uDict[i.WebUserId];
+                        })
+                        .Distinct()
+                        .OrderBy(u=> u.FullName)
+                        .ToList();
+        var smzs = smzODict.ContainsKey(tc.Obs.Id ?? 0) ? smzODict[tc.Obs.Id ?? 0] : [];
+        smzs = smzs.OrderBy(u => u.User.FullName).ToList();
+
+        var almostRaspredSum = tc.FRList.Where(fr => fr.Dt.Year == toYear && !friDict.ContainsKey(fr.Id)).Sum(f => f.Sm);
+
+
+        var obSmzSum = smzs.Select(u => 
+            Funs.Ostatok(u))
+            .Sum() - almostRaspredSum;
+
+        var rukInfo = ruks.Any() ? $"Рук. объекта: {string.Join(", ", ruks.Select(r=> r.Fio))}" : "Рук. объекта не назначен";
+        var smzInfo = $"{string.Join("\n", smzs.Select(sm => { return $"{sm.User.Fio} {Funs.Ostatok(sm).ToString("n0")}"; }))}";
+        var ostatok = smzs.Any() ? $"Суммарный остаток по самозанятым: {obSmzSum.ToString("n0")}" : "Нет самозанятых на объекте";
+        var res = $"{rukInfo}\n{ostatok}\n{smzInfo}";
+
+        lst.Add(("title", res));
+        lst.Add(("ost", (double)obSmzSum));
+        lst.Add(("hasRuk", ruks.Any()));
+        lst.Add(("hasSmz", smzs.Any()));
+
+        return lst;
+    }
+
+    /// <summary>
+    /// Display information to distribution
+    /// </summary>
+    /// <param name="tc">distribution</param>
+    /// <param name="dt">date</param>
+    /// <returns></returns>
+    List<(string menu, object val)> GetDocInfo(TableClass tc, DateTime dt, bool fromNerasp = true)
+    {
+        var dayFr = tc.FRList.Where((s => s.Dt.Date == dt.Date)).ToList();
+        var finLst = new List<(string, object)>();
+
+        if (dayFr.Any())
+        {
+            if (dayFr.All(f => friDict.ContainsKey(f.Id)))
+            {
+                var fril = dayFr.SelectMany(f => friDict[f.Id]).ToList();
+
+                if (fril.Any())
+                {
+                    if (fril.All(fri => ((fri.Ref1C ?? "") != "" || (fri.Ref1C ?? "") != "") && (fri.Doc1C ?? "") != "" && fri.Dt1C.HasValue))
+                    {
+                        var docs = fril.Select(fri =>
+                        {
+                            return $"{fri.Doc1C} от {fri.Dt1C?.ToString("dd.MM.yy")}";
+                        }).ToList();
+
+                        var res = dayFr.Sum(fr => fr.Sm) - fril.Sum(fr => fr.Sm);
+
+                        finLst.Add(res == 0 ? ("mes", $"Обработан документами:\n\n{String.Join("\n", docs)}") : ("mes", $"Обработан документами:\n\n{String.Join("\n", docs)}\n\nРазночтения сумм - сообщите администратору! {res.ToString("n0")}"));
+                        finLst.Add(fril.All(f => f.Dt1C.HasValue) ? ("style", $"green") : res == 0 ? ("style", $"") : ("style", "red"));
+                        finLst.Add(("bckg", ""));
+
+                    }
+                    else
+                    {
+                        var fDict = fril.GroupBy(f=> f.FinRaspId).ToDictionary(gr=> gr.Key, gr=> gr.ToList());
+                        var f = fril.Select(f => f.FinRaspId).Distinct().ToList();
+                        var dts = string.Join(",", fril.Select(f => f.Date.Date).Distinct().Select(d=> $"{d:dd.MM.yyyy}").ToList());
+                        var canDel = f.Select(f =>
+                        {
+                            return fDict[f].All(fri => !fri.FinDogId.HasValue && !fri.FinFirmId.HasValue);
+                        }).ToList();
+
+                        var btn = canDel.Any(del => del == true);
+                        finLst.Add(("mes", $"Распределено: {dts}.\nСформируйте документы 1С"));
+                        finLst.Add(("btn", (bool)btn));
+                        finLst.Add(("bckg", "#c8ffc7"));
+                    }
+                }
+            }
+            else
+            {
+                if (allItrsOnObDict.ContainsKey(tc.Obs.Id ?? 0))
+                {
+                    var ruks = allItrsOnObDict[tc.Obs.Id ?? 0].Where(itr => itr.IsRuk).ToList();
+
+                    var frList = dayFr.Where(f => f.Id != 0).ToList();
+
+                    var fril = frList.Any() ? dayFr.Where(f => friDict.ContainsKey(f.Id)).ToList() : null;
+
+                    var t = fril != null ? fril.SelectMany(f => friDict[f.Id])
+                                                .Where(fri => fri.FinDogId == null && fri.FinFirmId == null)
+                                                .ToList()
+                                         : null;
+
+                    var test = frList.Any(f => !friDict.ContainsKey(f.Id));
+
+                    var btn = test ? true : frList.Any() ? (fril?.Any() ?? false) 
+                                                         : (t?.Any() ?? false);
+
+                    finLst.Add(("btn", (bool)btn));
+
+                    finLst.Add(("mes", fromNerasp ? $"Ожидание распределения рук. объекта {String.Join(", ", ruks.DistinctBy(r => r.WebUserId).Select(r => uDict[r.WebUserId].Fio))}"
+                                              : frList.All(f => !friDict.ContainsKey(f.Id)) ? $"Ожидание распределения рук. объекта {String.Join(", ", ruks.DistinctBy(r => r.WebUserId).Select(r => uDict[r.WebUserId].Fio))}"
+                                                                                            : $"Есть нераспределенные рук. объекта начисления"));
+
+                    var color = dayFr.Select(f => { return friDict.ContainsKey(f.Id); }).ToList();
+
+                    finLst.Add(("bckg", fromNerasp ? "#ffdf6b6c" : dayFr.All(f => !friDict.ContainsKey(f.Id)) ? "#ffdf6b6c" : "#fd6bff37"));
+                }
+            }
+        }
+        return finLst;
+
+    }
+
+    /// <summary>
+    /// Delete distribution from db
+    /// </summary>
+    /// <param name="tc">distribution</param>
+    /// <param name="dt">date</param>
+    /// <returns></returns>
+    async Task DeleteFrFromDb(TableClass tc, DateTime dt)
+    {
+        var message = "Удалить начисления?";
+        var (efri, fril) = await Funs.SendReqAdmin<List<WebFinRaspItem>?>("NameOfApi", ["here are keys for Api"]);
+
+        if(fril != null)
+        {
+            var frs = tc.FRList.Select(f=> f.Id).ToList();
+
+            if(fril.Any(f=> frs.Contains(f.FinRaspId)))
+            {
+                message = "Удаляемые начисления имеют распределения рук. объектом. Все равно удалить?";
+            }
+        }
+
+        //confirm dialog
+        var answ = await DialogService.OpenAsync("", ds =>
+                @<CustomConfirmDialog ConfirmBtnTxt="Удалить" DS="ds" Message=@message />,
+                                    new ConfirmOptions { CloseDialogOnOverlayClick = true, CloseDialogOnEsc = true }) ?? false;
+
+        if (answ ?? false)
+        {
+            isSaving = true;
+            this.StateHasChanged();
+
+            var (er, res) = await Funs.SendReqAdmin<bool?>("NameOfApi", ["here are keys for Api"], obj:tc.Obs);
+
+            if (res ?? false)
+            {
+                await LoadLists();
+                objFilter = "";
+                Funs.Notify(NotificationService, NotificationSeverity.Success, "Записи удалены");
+            }
+            else
+            {
+                Funs.Notify(NotificationService, NotificationSeverity.Error, "Ошибка записи");
+            }
+            isSaving = false;
+        }
+    }
+
+    /// <summary>
+    /// Download excel
+    /// </summary>
+    /// <returns></returns>
+    async Task DownloadExcel()
+    {
+        using var ms = new MemoryStream();
+
+        var actO = tcFiltList.Where(tc => frDict.ContainsKey(tc.Obs.Id ?? 0) && tc.FRList.Any(fr => fr.Dt.Year == toYear)).ToList();
+
+        using (var package = new ExcelPackage(ms))
+        {
+            try
+            {
+                var sheetName = $"Отчет за {toYear} созд. {DateTime.Now: dd.MM.yyyy}";
+
+                var sheet = package.Workbook.Worksheets.Add(sheetName);
+
+                var cRow = 1;
+
+                void AddRow(List<object> data, bool isBold = false, bool titleColor = false)
+                {
+                    var iter = 1;
+
+                    data.ForEach(o =>
+                    {
+                        sheet.SetValue(cRow, iter, o);
+                        if (isBold)
+                        {
+                            sheet.Cells[cRow, iter].Style.Font.Bold = true;
+                            sheet.Cells[cRow, iter].Style.HorizontalAlignment = OfficeOpenXml.Style.ExcelHorizontalAlignment.Center;
+                        }
+                        if(titleColor)
+                        {
+                            sheet.Cells[cRow, iter].Style.Fill.PatternType = ExcelFillStyle.Solid;
+                            sheet.Cells[cRow, iter].Style.Fill.BackgroundColor.SetColor(System.Drawing.Color.BurlyWood);
+                        }
+                        iter++;
+                    });
+
+                    cRow++;
+                }
+
+                #region table 1
+                var raspDates = frList.Where(fr => fr.Dt.Year == toYear).GroupBy(fr => fr.Dt.Date)
+                                        .OrderBy(gr => gr.Key)
+                                        .ToList();
+
+                var clm = raspDates.Count + 4;
+
+                sheet.Cells[cRow, 1, cRow, clm].Merge = true;
+
+                AddRow(new List<object> { "Распределение средств по объектам" }, true, true);
+
+                var hl = new List<object> { "#", "Код", "Объект", "Σ" };
+
+                hl.AddRange(raspDates.Select(gr => $"{gr.Key:dd.MM}"));
+                AddRow(hl, true);
+
+                var iter = 1;
+                actO.OrderByDescending(o => o.Obs.Description).ToList().ForEach(tc =>
+                {
+                    var frSum = tc.FRList.Where(fr => fr.Dt.Year == toYear).Sum(fr => fr.Sm).ToString("n0");
+                    var row = new List<object> { iter++, tc.Obs.Code, tc.Obs.Description, frSum };
+
+                    raspDates.ForEach(dtGr =>
+                    {
+                        var frs = tc.FRList.Where(fr => fr.Dt.Date == dtGr.Key).ToList();
+
+                        if (frs.Any())
+                        {
+                            row.Add(frs.Sum(fr => fr.Sm).ToString("n0"));
+                        }
+                        else
+                        {
+                            row.Add("");
+                        }
+                        sheet.Column(iter).AutoFit();
+                        sheet.Column(iter).Style.HorizontalAlignment = OfficeOpenXml.Style.ExcelHorizontalAlignment.Center;
+                    });
+
+                    AddRow(row);
+                });
+
+                //summary
+                sheet.Cells[cRow, 1, cRow, 3].Merge = true;
+                var objItog = new List<object>
+                {
+                    "Итого:","","",
+                    frList.Where(fr => fr.Dt.Year == toYear).Sum(s=> s.Sm).ToString("n0")
+                };
+                objItog.AddRange(raspDates.Select(gr => (object)gr.Sum(fr => fr.Sm).ToString("n0")));
+                AddRow(objItog, true, true);
+                cRow++;
+                #endregion
+
+                #region table 2
+                var friUserId = friList.Select(f => f.UserTo).Distinct();
+                var actSmz = allUserList.Where(u => friUserId.Contains(u.Id)).ToList();
+
+                var friDates = friList.GroupBy(fr => fr.Date.Date)
+                                      .OrderBy(gr => gr.Key)
+                                      .ToList();
+
+                clm = friDates.Count + 4;
+                sheet.Cells[cRow, 1, cRow, clm].Merge = true;
+                AddRow(new List<object> { "Распределение средств по самозанятым" }, true, true);
+
+                sheet.Cells[cRow, 2, cRow, 3].Merge = true;
+                hl = new List<object> { "#", "Самозанятый", "", "Σ" };
+
+                hl.AddRange(friDates.Select(gr => $"{gr.Key:dd.MM}"));
+                AddRow(hl, true);
+
+                iter = 1;
+                actSmz.OrderBy(u => u.FullName).ToList().ForEach(u =>
+                {
+                    var fullSum = friList.Where(f => f.UserTo == u.Id).Sum(f => f.Sm).ToString("n0");
+
+                    var row = new List<object> { iter++, u.FullName,"", fullSum };
+                    friDates.ForEach(dtGr =>
+                    {
+                        var fris = friList.Where(fr => fr.Date.Date == dtGr.Key.Date && fr.UserTo == u.Id).ToList();
+
+                        if (fris.Any())
+                        {
+                            row.Add(fris.Sum(fr => fr.Sm).ToString("n0"));
+                        }
+                        else
+                        {
+                            row.Add("");
+                        }
+                        sheet.Column(iter).AutoFit();
+                        sheet.Column(iter).Style.HorizontalAlignment = OfficeOpenXml.Style.ExcelHorizontalAlignment.Center;
+                    });
+
+                    sheet.Cells[cRow, 2, cRow, 3].Merge = true;
+                    AddRow(row);
+                });
+
+                //summary
+                sheet.Cells[cRow, 1, cRow, 3].Merge = true;
+
+                var smzItog = new List<object>
+                {
+                    "Итого:", "", "", friList.Where(f=> f.FinDogId.HasValue).Sum(s=> s.Sm).ToString("n0")
+                };
+
+                smzItog.AddRange(friDates.Select(gr => (object)gr.Sum(fr => fr.Sm).ToString("n0")));
+
+                AddRow(smzItog, true, true);
+                cRow++;
+                #endregion
+
+                #region table 3
+                var actIp = finFirmList;
+
+                clm = friDates.Count + 4;
+                sheet.Cells[cRow, 1, cRow, clm].Merge = true;
+                AddRow(new List<object> { "Распределение средств по ИП" }, true, true);
+
+                sheet.Cells[cRow, 2, cRow, 3].Merge = true;
+                hl = new List<object> { "#", "ИП", "", "Σ" };
+
+                hl.AddRange(friDates.Select(gr => $"{gr.Key:dd.MM}"));
+                AddRow(hl, true);
+
+                iter = 1;
+                actIp.OrderBy(u => u.FFName).ToList().ForEach(ff =>
+                {
+                    var fullSum = friList.Where(f => f.FinFirmId == ff.Id).Sum(f => f.Sm).ToString("n0");
+
+                    var row = new List<object> { iter++, ff.FFName, "", fullSum };
+
+                    friDates.ForEach(dtGr =>
+                    {
+                        var fris = friList.Where(fr => fr.Date.Date == dtGr.Key.Date && fr.FinFirmId == ff.Id).ToList();
+
+                        if (fris.Any())
+                        {
+                            row.Add(fris.Sum(fr => fr.Sm).ToString("n0"));
+                        }
+                        else
+                        {
+                            row.Add("");
+                        }
+
+                        sheet.Column(iter).AutoFit();
+                        sheet.Column(iter).Style.HorizontalAlignment = OfficeOpenXml.Style.ExcelHorizontalAlignment.Center;
+                    });
+
+                    sheet.Cells[cRow, 2, cRow, 3].Merge = true;
+                    AddRow(row);
+                });
+
+                //summary
+                sheet.Cells[cRow, 1, cRow, 3].Merge = true;
+
+                var ipItog = new List<object>
+                {
+                    "Итого:", "", "",
+                    friList.Where(f=> f.Dt1C.HasValue).Sum(s=> s.Sm).ToString("n0")
+                };
+
+                ipItog.AddRange(friDates.Select(gr => (object)gr.Sum(fr => fr.Sm).ToString("n0")));
+                AddRow(ipItog, true, true);
+                cRow++;
+                #endregion
+
+                sheet.Column(1).Width = 5;
+                sheet.Column(1).Style.HorizontalAlignment = OfficeOpenXml.Style.ExcelHorizontalAlignment.Center;
+                sheet.Column(2).Style.HorizontalAlignment = OfficeOpenXml.Style.ExcelHorizontalAlignment.Left;
+                sheet.Column(3).Style.HorizontalAlignment = OfficeOpenXml.Style.ExcelHorizontalAlignment.Left;
+
+                
+                //Save to file
+                package.Save();
+                byte[] res = ms.ToArray();
+                await Js.DownloadFileAsync($"{sheetName}.xlsx", res);
+            }
+            catch { }
+        }
+    }    
+}
